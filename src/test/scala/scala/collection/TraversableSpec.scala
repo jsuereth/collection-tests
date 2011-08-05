@@ -1,16 +1,22 @@
 package scala.collection
 
-import infrastructure._
-import org.scalacheck._
-import org.scalacheck.Prop._
+import java.util.concurrent.atomic.AtomicInteger
+import org.scalacheck.Prop.forAll
+import org.scalacheck.Prop.propBoolean
 import org.scalacheck.util.Buildable
+import org.scalacheck.Gen
+import org.scalacheck.Properties
+import infrastructure.arbUniq
+import infrastructure.clamp
+import infrastructure.sameElementsUnordered
+import infrastructure.TestCollection
+import infrastructure.Uniq
+import infrastructure.UniqSub
 
-trait TraversableSpec { this: Properties =>
+trait TraversableSpec extends TestCollection { this: Properties =>
 
   // Abstract members
   type CC[X] <: Traversable[X]
-  implicit def buildableCC[T]: Buildable[T, CC]
-  def sameElements[T](a: GenTraversableOnce[T], b: GenTraversableOnce[T]): Boolean
 
   // Concrete members
   val genTraversableOfOnes: Gen[Traversable[Int]] = Gen.containerOf(1)
@@ -69,22 +75,78 @@ trait TraversableSpec { this: Properties =>
   property("collectFirst") = forAll { t: CC[Uniq] =>
     val U = new Uniq
     (t collectFirst { case U => 1 } isEmpty) :| "mismatching elements are not considered" &&
-    (!t.isEmpty ==> (t.collectFirst{ case u: Uniq => u }.get == t.head)) :| "first matching element is collected" &&
-    (!t.isEmpty ==> (t.collectFirst{ case u: Uniq => 1 }.get == 1)) :| "partial function is being applied"
+    (t.collectFirst{ case u: Uniq => u } == t.headOption) :| "first matching element is collected" &&
+    (t.collectFirst{ case u: Uniq => 1 } == t.headOption.map(_ => 1)) :| "partial function is being applied"
   }
 
   property("count") = forAll { t: CC[Uniq] =>
     (t.count(_ => true) == t.size) :| "count all" &&
     (t.count(_ => false) == 0) :| "count none" && 
-    (!t.isEmpty ==> (t.count(_ == t.head) == 1)) :| "count first" 
+    (t.forall(e => t.count(_ == e) == 1)) :| "count any element" 
+  }
+
+  property("drop") = forAll { (t: CC[Uniq], n: Int) =>
+    val size = t.size
+    val resultSize = size - clamp(n, 0, size)
+    val dropped = t.drop(n)
+    (dropped.size == resultSize) :| "right number of elements dropped" &&
+    containsSlice(t, dropped) :| "remaining elements from original collection" &&
+    sameElements(t, t.drop(0)) :| "drop none" &&
+    t.drop(Int.MaxValue).isEmpty :| "drop all"
+  }
+
+  property("dropWhile") = forAll { (t: CC[Uniq], n: Int) =>
+    (t.dropWhile(_ => true).isEmpty) :| "drop all" &&
+    sameElements(t, t.dropWhile(_ => false)) :| "drop none"
+  }
+
+  property("exists") = forAll { t: CC[Uniq] =>
+    !t.exists(_ => false) :| "exists false" &&
+    (t.exists(_ => true) != t.isEmpty) :| "exists true" &&
+    (t.forall { e => t.exists(_ == e) }) :| "every elements exists"
+  }
+
+  property("filter") = forAll { t: CC[Uniq] =>
+    t.filter(_ => false).isEmpty :| "filter all" &&
+    sameElements(t, t.filter(_ => true)) :| "filter none" &&
+    (t filter { case _: UniqSub => true case _ => false } isEmpty) :| "filter all (subclass)"
+  }
+
+  property("filterNot") = forAll { t: CC[Uniq] =>
+    t.filterNot(_ => true).isEmpty :| "filter all" &&
+    sameElements(t, t.filterNot(_ => false)) :| "filter none" &&
+    (t filterNot { case _: UniqSub => false case _ => true } isEmpty) :| "filter all (subclass)"
+  }
+
+  property("find") = forAll { t: CC[Uniq] =>
+    (t.find(_ => true).isEmpty == t.isEmpty) :| "find all" &&
+    t.find(_ => false).isEmpty :| "find none" &&
+    t.forall(e => t.find(_ == e) == Some(e)) :| "find any elements"
+  }
+
+  property("flatMap") = forAll { t: CC[Uniq] =>
+    val ints = t.flatMap(_ => create(util.Random.nextInt))
+    t.flatMap(_ => create()).isEmpty :| "flatMap to empty" &&
+    sameElements(t, t.flatMap(create(_))) :| "flatMap to sameElements" &&
+    sameElements(ints, ints.flatMap(i => create(i.toString)).flatMap(s => create(s.toInt))) :| "inverse operations result in equal collection"
+  }
+
+  property("flatten") = forAll { t: CC[CC[Uniq]] =>
+    sameElements(t, t.map(create(_)).flatten) :| "nest and flatten" &&
+    !t.exists(_.isInstanceOf[Uniq]) :| "not flattened" &&
+    t.flatten.forall(_.isInstanceOf[Uniq]) :| "flattened"
+  }
+ 
+  property("forall") = forAll { t: CC[Uniq] =>
+    t.forall(_ => true) :| "forall true" &&
+    t.forall(_.isInstanceOf[Uniq]) :| "forall Uniq" &&
+    (t.forall(_ => false) == t.isEmpty) :| "forall false" &&
+    (t.forall(_.isInstanceOf[UniqSub]) == t.isEmpty) :| "forall UniqSub"
   }
 
   property("map") = forAll { t: CC[Uniq] => 
-    (t.size == t.map(identity).size) :| "preserves size" &&
-    sameElements(t, t.map(identity)) :| "xs.map(identity) == xs"
-  }
-  
-  property("map [Int]") = forAll { t: CC[Int] => 
-    sameElements(t, t.map(_.toString).map(_.toInt)) :| "inverse operations result in equal collection"
+    val ints = t.map(_ => util.Random.nextInt)
+    sameElements(t, t.map(identity)) :| "map to sameElements" &&
+    sameElements(ints, ints.map(_.toString).map(_.toInt)) :| "inverse operations result in equal collection"
   }
 }

@@ -20,4 +20,13 @@ object InfrastructureTests extends Properties("Test Infrastructure") {
     sameElementsUnordered(a :: b :: is, b :: a :: is) :| "different order" &&
     !sameElementsUnordered(is, a :: is) :| "different elements"
   }
+
+  property("containsAll") = forAll { is: List[Uniq] =>
+    val a, b = new Uniq
+    containsAll(is, is) :| "same collection" &&
+    containsAll(is, is.reverse) :| "reverse order" &&
+    containsAll(a :: b :: is, b :: a :: is) :| "different order" &&
+    containsAll(a :: is, is) :| "container has additional elements"
+    !containsAll(is, a :: is) :| "different elements"
+  }
 }
